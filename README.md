@@ -7,4 +7,6 @@ This project demonstrates a comprehensive data warehousing and analytics solutio
 
 ## Data Architecture 🏗
 The data architecture for this project follows #### Medallion Architecture **🥉Bronze**, **🥈Silver**, and **🥇Gold layers**:
-[D:\SQL\My Projects\Data Warehouse Project]
+<img width="888" height="467" alt="Drawing of data Architecture" src="https://github.com/user-attachments/assets/e987b59e-cdc4-4489-a19b-438e9312f1a5" />
+
+
