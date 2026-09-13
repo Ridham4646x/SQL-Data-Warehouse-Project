@@ -1,0 +1,297 @@
+/* Bronze layer-->raw data ----> cleaning----->load to----->Silver layer */
+
+--Adding raw data / Full load to our empty table with 'BULK INSERT' command
+
+--If same script runs twise , same data adding twisly to same table causes ERROR
+
+
+
+CREATE OR ALTER PROCEDURE silver.load_silver AS
+BEGIN
+	DECLARE @start_time DATETIME, @end_time DATETIME, @batch_start_time DATETIME, @batch_end_time DATETIME;
+	
+	BEGIN TRY
+		SET @batch_start_time = GETDATE();
+		PRINT '================================================';
+		PRINT 'Loading Silver Layer';
+		PRINT '================================================';
+
+		PRINT '------------------------------------------------';
+		PRINT 'Loading CRM Tables';
+		PRINT '------------------------------------------------';
+
+		print'~~~~~~~~~~~~'
+	-- -----------------------------------------------------------------------------------------------------------------------------------------
+		SET @start_time = GETDATE();
+
+		PRINT '>> Truncating Table: silver.crm_cust_info';
+		TRUNCATE TABLE silver.crm_cust_info;
+
+		PRINT '>> Inserting Data Into: silver.crm_cust_info';
+
+		--see and get only the usuful data from repeated data/null data
+		-- example of 
+		-- if you want to check cst_id=29466 
+		-- add beside flag_last=1 and cst_id=29466 
+		-- has 3 rows of data we use row_number() to rank the data based on cst_create_date
+
+		--but here we do for all rows ... 🤠
+		insert into silver.crm_cust_info
+		(
+			cst_id,
+			cst_key,
+			cst_firstname,
+			cst_lastname,
+			cst_marital_status,
+			cst_gndr,
+			cst_create_date
+		)
+
+		select 
+		cst_id,
+		cst_key,
+		--data Normalization and Standardization
+		trim(cst_firstname) as cst_firstname,
+		trim(cst_lastname) as cst_lastname,
+
+		--Handling Missing data
+		CASE WHEN UPPER(TRIM(cst_marital_status)) = 'M' Then 'Married'
+			 WHEN UPPER(TRIM(cst_marital_status)) = 'S' Then 'Single'
+			 ELSE 'n/a'
+		END
+		cst_marital_status,
+		CASE WHEN UPPER(TRIM(cst_gndr)) = 'F' Then 'Female'
+			 WHEN UPPER(TRIM(cst_gndr)) = 'M' Then 'Male'
+			 ELSE 'n/a'
+		END
+		cst_gndr,
+		cst_create_date
+
+		--Removing Duplicates
+		from(
+			select 
+			*,
+			ROW_NUMBER() over(partition by cst_id order by cst_create_date desc) as flag_last
+			from bronze.crm_cust_info
+			where cst_id is not null
+			)t where flag_last=1
+
+
+
+		SET @end_time = GETDATE();
+		print'Load Duration :' + CAST(DATEDIFF(second,@start_time, @end_time)AS VARCHAR)+ 'seconds'
+		print'~~~~~~~~~~~~'
+	-- -----------------------------------------------------------------------------------------------------------------------------------------
+
+		SET @start_time = GETDATE();
+		PRINT '>> Truncating Table: silver.crm_prd_info';
+		TRUNCATE TABLE silver.crm_prd_info;
+
+		PRINT '>> Inserting Data Into: silver.crm_prd_info';
+		--see and get only the usuful data from repeated data/null data
+		-- example of 
+		-- if you want to check cst_id=29466 
+		-- add beside flag_last=1 and cst_id=29466 
+		-- has 3 rows of data we use row_number() to rank the data based on cst_create_date
+
+		--but here we do for all rows ... 🤠
+
+		insert into silver.crm_prd_info
+		(
+			prd_id ,
+			cat_id ,
+			prd_key ,
+			prd_nm ,
+			prd_cost ,
+			prd_line ,
+			prd_start_dt ,
+			prd_end_dt 
+		)
+		select 
+		prd_id,  --ok already
+		replace(SUBSTRING(prd_key,1,5),'-','_') as cat_id,
+		SUBSTRING(prd_key,7,LEN(prd_key)) as prd_key,
+		prd_nm,
+		isnull(prd_cost,0) as prd_cost,
+		CASE upper(trim(prd_line))
+			WHEN  'M' THEN 'Mountain'
+			WHEN  'R' THEN 'Road'
+			WHEN  'S' THEN 'otherSales'
+			WHEN  'T' THEN 'Touring'
+			ELSE 'n/a'
+		END as prd_line ,
+		CAST(prd_start_dt AS DATE)AS prd_start_dt,
+		CAST(DATEADD(day, -1, LEAD(prd_start_dt) OVER (PARTITION BY prd_key ORDER BY prd_start_dt))AS DATE) AS prd_end_date
+		from bronze.crm_prd_info
+
+		--select * from bronze.erp_PX_CAT_G1V2
+
+		--select * from bronze.crm_sales_details
+
+		SET @end_time = GETDATE();
+		print'Load Duration :' + CAST(DATEDIFF(second,@start_time, @end_time)AS VARCHAR)+ 'seconds'
+		print'~~~~~~~~~~~~'
+
+	-- -----------------------------------------------------------------------------------------------------------------------------------------
+		SET @start_time = GETDATE();
+		PRINT '>> Truncating Table: silver.crm_sales_details';
+		TRUNCATE TABLE silver.crm_sales_details;
+		PRINT '>> Inserting Data Into: silver.crm_sales_details';
+		insert into silver.crm_sales_details(
+			sls_ord_num ,
+			sls_prd_key ,
+			sls_cust_id ,
+			sls_order_dt ,
+			sls_ship_dt ,
+			sls_due_dt ,
+			sls_sales ,
+			sls_quantity ,
+			sls_price 
+
+		)
+		select 
+			sls_ord_num, --#OK
+			sls_prd_key, --#OK
+			sls_cust_id,--#OK
+
+			--fixing sls_order_dt ,sls_ship_dt ,sls_due_dt
+			case when sls_order_dt=0 or len(sls_order_dt)!=8 then NULL
+				else cast(cast(sls_order_dt as varchar)as date)
+			end as sls_order_dt,
+
+			case when sls_ship_dt=0 or len(sls_ship_dt)!=8 then NULL
+				else cast(cast(sls_ship_dt as varchar)as date)
+			end as sls_order_dt,
+
+			case when sls_due_dt=0 or len(sls_due_dt)!=8 then NULL
+				else cast(cast(sls_due_dt as varchar)as date)
+			end as sls_order_dt,
+			case when sls_sales is null or sls_sales<=0 or sls_sales!= sls_quantity*abs(sls_price)
+				 then sls_quantity * abs(sls_price)
+				 else sls_sales
+			end as sls_sales,
+
+			sls_quantity,
+
+			case when sls_price is null or sls_price<=0
+					then sls_sales/nullif(sls_quantity,0)
+				else sls_price
+			end as sls_price
+
+		from bronze.crm_sales_details
+
+
+		SET @end_time = GETDATE();
+		print'Load Duration :' + CAST(DATEDIFF(second,@start_time, @end_time)AS VARCHAR)+ 'seconds'
+		print'~~~~~~~~~~~~'
+	-- -----------------------------------------------------------------------------------------------------------------------------------------
+
+
+		PRINT '------------------------------------------------';
+		PRINT 'Loading ERP Tables';
+		PRINT '------------------------------------------------';
+
+	-- -----------------------------------------------------------------------------------------------------------------------------------------
+		SET @start_time = GETDATE();
+		PRINT '>> Truncating Table: silver.erp_CUST_AZ12'
+		TRUNCATE TABLE silver.erp_CUST_AZ12;
+
+		PRINT '>> Inserting Data Into: silver.erp_CUST_AZ12';
+		
+		insert into silver.erp_CUST_AZ12(
+			CID ,
+			BDATE ,
+			GEN
+		)
+		select 
+			--we have to remove extra prifix 'NAS'
+			case when CID like 'NAS%' then SUBSTRING(CID,4,len(CID))
+				 else CID
+			END as CID,
+			--Fix futurastic Birthdate
+			case when BDATE > GETDATE() then NULL
+				else BDATE
+			end as BDATE,
+			--fomating gender
+			case when GEN='M' then 'Male'
+				 when GEN='F' then 'Female'
+				 when GEN=' ' then Null
+				 else GEN
+			END  as GEN
+		from bronze.erp_CUST_AZ12
+
+		SET @end_time = GETDATE();
+		print'Load Duration :' + CAST(DATEDIFF(second,@start_time, @end_time)AS VARCHAR)+ 'seconds'
+		print'~~~~~~~~~~~~'
+
+	-- -----------------------------------------------------------------------------------------------------------------------------------------
+
+
+		SET @start_time = GETDATE();
+		PRINT '>> Truncating Table: silver.erp_LOC_A101'
+		TRUNCATE TABLE silver.erp_LOC_A101;
+
+		PRINT '>> Inserting Data Into: silver.erp_LOC_A101'
+		insert into silver.erp_loc_a101(
+			cid,
+			cntry)
+		SELECT
+				REPLACE(cid, '-', '') AS cid, 
+				CASE
+					WHEN TRIM(cntry) = 'DE' THEN 'Germany'
+					WHEN TRIM(cntry) IN ('US', 'USA') THEN 'United States'
+					WHEN TRIM(cntry) = '' OR cntry IS NULL THEN 'n/a'
+					ELSE TRIM(cntry)
+				END AS cntry -- Normalize and Handle missing or blank country codes
+		FROM bronze.erp_loc_a101;
+		SET @end_time = GETDATE();
+		print'Load Duration :' + CAST(DATEDIFF(second,@start_time, @end_time)AS VARCHAR)+ 'seconds'
+		print'~~~~~~~~~~~~'
+
+		-- -----------------------------------------------------------------------------------------------------------------------------------------
+
+		SET @start_time = GETDATE();
+		PRINT '>> Truncating Table: silver.erp_PX_CAT_G1V2'
+		TRUNCATE TABLE silver.erp_PX_CAT_G1V2;
+
+		PRINT '>> Inserting Data Into: silver.erp_PX_CAT_G1V2'
+		INSERT INTO silver.erp_px_cat_g1v2 (
+			id,
+			cat,
+			subcat,
+			maintenance
+		)
+
+		--WOooohhoo...!! here we have clean and perfect data . So NO need to do anything ...!! 🤩
+		SELECT
+			id,
+			cat,
+			subcat,
+			maintenance
+		FROM bronze.erp_px_cat_g1v2;
+
+		SET @end_time = GETDATE();
+		print'Load Duration :' + CAST(DATEDIFF(second,@start_time, @end_time)AS VARCHAR)+ 'seconds'
+
+		SET @batch_end_time = GETDATE();
+		print'silver layer batch load is Complited !! YEEE'
+
+		print'silver Batch Load Duration :' + CAST(DATEDIFF(second,@batch_start_time, @batch_end_time)AS VARCHAR)+ 'seconds'
+		print'~~~~~~~~~~~~'
+
+-- -----------------------------------------------------------------------------------------------------------------------------------------
+
+	END TRY
+	BEGIN CATCH
+		PRINT'========================================================'
+		PRINT'ERROR OCUURED DURING LOADING silver LAYER'
+		PRINT'Error Message' + ERROR_MESSAGE();
+		PRINT'Error Message' + CAST(ERROR_NUMBER() AS NVARCHAR);
+		PRINT'Error Message' + CAST(ERROR_STATE() AS NVARCHAR);
+		PRINT'========================================================'
+	END CATCH
+END;
+GO
+EXEC silver.load_silver
+GO
+
